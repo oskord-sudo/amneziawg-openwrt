@@ -1,0 +1,194 @@
+name: Daily maintenance (sync, cleanup, release if needed)
+
+on:
+  schedule:
+    # Раз в день
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: daily-maintenance
+  cancel-in-progress: true
+
+jobs:
+  sync-and-cleanup:
+    name: Sync fork + remove SNAPSHOT + clean README
+    runs-on: ubuntu-latest
+    outputs:
+      openwrt_version: ${{ steps.check.outputs.openwrt_version }}
+      need_build: ${{ steps.check.outputs.need_build }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # --- 1. Синхронизация с upstream ---
+      - name: Sync from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # upstream: this-username-has-been-taken/amneziawg-openwrt
+          UPSTREAM="this-username-has-been-taken/amneziawg-openwrt"
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream master
+
+          # Сливаем upstream/master в наш master (предпочитаем наши правки при конфликте cleanup-файлов)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "Already up to date with upstream"
+          else
+            echo "Merging upstream/master..."
+            # -X ours: при конфликте оставляем наши версии (remove-snapshot, README, release.yml)
+            git merge upstream/master -m "chore: sync from upstream" -X ours || {
+              echo "Merge conflict — resolving in favor of our tree for protected paths"
+              git checkout --ours .github/workflows/release.yml 2>/dev/null || true
+              git checkout --ours .github/workflows/daily-maintenance.yml 2>/dev/null || true
+              git checkout --ours .github/workflows/remove-snapshot.yml 2>/dev/null || true
+              git add -A
+              git commit -m "chore: sync from upstream (resolved)" || true
+            }
+          fi
+
+      # --- 2. Удаление SNAPSHOT + очистка README ---
+      - name: Remove snapshot.yml and clean README
+        id: cleanup
+        run: |
+          set -euo pipefail
+          changed=false
+
+          if [ -f .github/workflows/snapshot.yml ]; then
+            echo "Removing snapshot.yml"
+            git rm -f .github/workflows/snapshot.yml
+            changed=true
+          fi
+
+          if [ -f README.md ] && grep -qiE 'snapshot|SNAPSHOT' README.md; then
+            echo "Cleaning README.md"
+            python3 << 'PY'
+          import re
+          with open("README.md", "r", encoding="utf-8") as f:
+              text = f.read()
+
+          text = re.sub(
+              r"(A: Prebuilt packages for the most popular architectures are published on the \[releases page\]\([^)]+\)): a versioned release for the latest stable OpenWRT version and a daily refreshed `snapshot` pre-release for `SNAPSHOT`\.",
+              r"\1 for the latest stable OpenWrt version.",
+              text,
+              flags=re.I,
+          )
+          text = re.sub(
+              r"\n3\. Kernel modules built for `?SNAPSHOT`? are only installable while the firmware `?vermagic`? matches\.\n4\.",
+              r"\n3.",
+              text,
+          )
+          text = re.sub(
+              r"- \*\*OpenWRT version:\*\* `SNAPSHOT` or a stable release \(e\.g\., `[^`]+`\), found under",
+              r"- **OpenWrt version:** a stable release (e.g., `24.10.2`), found under",
+              text,
+              flags=re.I,
+          )
+          text = re.sub(
+              r"- \*\*OpenWrt version:\*\* `SNAPSHOT` or a stable release \(e\.g\., `[^`]+`\), found under",
+              r"- **OpenWrt version:** a stable release (e.g., `24.10.2`), found under",
+              text,
+              flags=re.I,
+          )
+          text = re.sub(
+              r"- For a stable release, take it from the latest versioned release\. It is built against the newest stable OpenWRT version\.\n"
+              r"- For `SNAPSHOT`, take it from the `snapshot` pre-release.*?vermagic.*?\n",
+              r"- Take it from the latest versioned release. It is built against the newest stable OpenWrt version.\n",
+              text,
+              flags=re.I | re.S,
+          )
+          text = re.sub(
+              r"\n2\. `Snapshot - Build AmneziaWG for OpenWrt SNAPSHOT` runs daily and republishes the rolling `snapshot` pre-release\.\n",
+              r"\n",
+              text,
+              flags=re.I,
+          )
+          text = re.sub(
+              r"\n#### Vermagic control for `SNAPSHOT` versions\n.*?(?=\n#### |\n## |\Z)",
+              "\n#### Vermagic control\n\n"
+              "> **Note:** Every workflow records the `vermagic` on the `Vermagic:` line of `build-info.txt` within the artifacts.\n\n"
+              "Vermagic is a hash calculated for the OpenWrt kernel. When installing kernel-related packages, "
+              "OpenWrt checks if the package's `vermagic` matches the kernel's. If not, installation won't succeed. "
+              "Check your firmware's `vermagic` by running `apk info kernel` or `opkg info kernel` and noting the hash "
+              "after the kernel version in `Version`.\n",
+              text,
+              flags=re.I | re.S,
+          )
+          with open("README.md", "w", encoding="utf-8") as f:
+              f.write(text)
+          print("README cleaned")
+          PY
+            git add README.md
+            changed=true
+          fi
+
+          if [ "$changed" = true ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore: remove SNAPSHOT and clean README after sync" || true
+          fi
+
+          # Пушим все коммиты sync/cleanup
+          git push origin HEAD:master || git push origin HEAD:main
+
+      # --- 3. Проверка: нужен ли новый билд под latest stable OpenWrt ---
+      - name: Check if build is needed
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          openwrt=$(curl -fsS https://downloads.openwrt.org/releases/ \
+            | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+            | sort -V \
+            | tail -n1)
+
+          if [ -z "$openwrt" ]; then
+            echo "Cannot detect latest OpenWrt version"
+            exit 1
+          fi
+          echo "Latest stable OpenWrt: $openwrt"
+          echo "openwrt_version=$openwrt" >> "$GITHUB_OUTPUT"
+
+          RELEASE_TAG="latest"
+
+          # Есть ли уже пакеты для этой версии OpenWrt в релизе latest?
+          if gh release view "$RELEASE_TAG" --json assets \
+               --jq '.assets[].name' 2>/dev/null \
+             | grep -q -- "-openwrt-${openwrt}\.tar\.gz$"; then
+            echo "Packages for OpenWrt $openwrt already present in release '$RELEASE_TAG' — skip build"
+            echo "need_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No packages for OpenWrt $openwrt in release '$RELEASE_TAG' — need build"
+            echo "need_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # --- 4. Сборка + публикация ТОЛЬКО если нужно ---
+  release:
+    name: Build & publish for latest OpenWrt
+    needs: sync-and-cleanup
+    if: needs.sync-and-cleanup.outputs.need_build == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      amneziawg_version: master
+      openwrt_version: ${{ needs.sync-and-cleanup.outputs.openwrt_version }}
+      publish: true
+      draft: false
+      release_tag: latest
+    secrets: inherit

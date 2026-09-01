@@ -1,52 +1,76 @@
 name: Release - Build AmneziaWG for the latest OpenWrt release
 
-# Builds the whole package set for every architecture listed in
-# .github/targets.json against a stable OpenWrt release and attaches the result
-# to a GitHub release.
+# Builds packages for every architecture in .github/targets.json against a
+# stable OpenWrt release and attaches them to a GitHub release.
 #
-# Pushing a `vX.Y.Z' tag creates a draft release holding the freshly built
-# packages, so that the changelog can be written before it becomes public.
-# Running the workflow by hand against an already existing release only adds
-# the new archives to it, which is how an unchanged YAAWG version is rebuilt
-# for a newly published OpenWrt release.
+# Triggers:
+#   - workflow_call   — from daily-maintenance (only when a new OpenWrt is needed)
+#   - push of v* tag  — creates a draft release for that tag
+#   - workflow_dispatch — manual run
+#
+# There is NO schedule here. Daily checks live in daily-maintenance.yml.
 
 on:
+  workflow_call:
+    inputs:
+      amneziawg_version:
+        description: "YAAWG tag, branch or commit to build from"
+        type: string
+        required: true
+      openwrt_version:
+        description: "OpenWrt version, or `latest`"
+        type: string
+        required: true
+      publish:
+        description: "Create/update the GitHub release"
+        type: boolean
+        required: true
+      draft:
+        description: "Create the release as a draft if it does not exist yet"
+        type: boolean
+        required: true
+      release_tag:
+        description: "GitHub release tag to publish under (e.g. latest or v3.1.0)"
+        type: string
+        required: true
+
   push:
     tags:
       - "v*"
-  schedule:
-    # Once a day check whether a newer stable OpenWrt release appeared and, if
-    # so, build the latest published YAAWG release for it and attach the
-    # archives to that release. Nothing happens when everything is up to date.
-    - cron: "0 5 * * *"
+
   workflow_dispatch:
     inputs:
       amneziawg_version:
-        description: "YAAWG release tag, branch or commit hash to build"
+        description: "YAAWG tag, branch or commit to build from"
         type: string
         required: true
         default: "master"
       openwrt_version:
-        description: "OpenWrt release to build against, or `latest`"
+        description: "OpenWrt version, or `latest`"
         type: string
         required: true
         default: "latest"
       publish:
-        description: "Attach the packages to the release named after the built version"
-        type: boolean
-        required: true
-        default: false
-      draft:
-        description: "Create the release as a draft, if it does not exist yet"
+        description: "Create/update the GitHub release"
         type: boolean
         required: true
         default: true
+      draft:
+        description: "Create the release as a draft if it does not exist yet"
+        type: boolean
+        required: true
+        default: false
+      release_tag:
+        description: "GitHub release tag to publish under (e.g. latest or v3.1.0)"
+        type: string
+        required: true
+        default: "latest"
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -59,6 +83,7 @@ jobs:
       amneziawg_version: ${{ steps.params.outputs.amneziawg_version }}
       publish: ${{ steps.params.outputs.publish }}
       draft: ${{ steps.params.outputs.draft }}
+      release_tag: ${{ steps.params.outputs.release_tag }}
       skip: ${{ steps.params.outputs.skip }}
     steps:
       - name: Checkout YAAWG repository
@@ -74,61 +99,44 @@ jobs:
 
           echo "targets=$(jq -c . .github/targets.json)" >> "$GITHUB_OUTPUT"
 
-          requested="${{ inputs.openwrt_version || 'latest' }}"
-          if [ "$requested" = "latest" ]; then
+          skip=false
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Tag push: build the tagged commit, publish draft release under the same tag
+            tag="${{ github.ref_name }}"
+            echo "amneziawg_version=$tag" >> "$GITHUB_OUTPUT"
+            echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "draft=true" >> "$GITHUB_OUTPUT"
+
             requested=$(curl -fsS https://downloads.openwrt.org/releases/ \
               | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' \
               | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
               | sort -V \
               | tail -n1)
+          else
+            # workflow_call or workflow_dispatch
+            echo "amneziawg_version=${{ inputs.amneziawg_version }}" >> "$GITHUB_OUTPUT"
+            echo "release_tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+            echo "publish=${{ inputs.publish }}" >> "$GITHUB_OUTPUT"
+            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
+
+            requested="${{ inputs.openwrt_version }}"
+            if [ -z "$requested" ] || [ "$requested" = "latest" ]; then
+              requested=$(curl -fsS https://downloads.openwrt.org/releases/ \
+                | grep -oE 'href="[0-9]+\.[0-9]+\.[0-9]+/"' \
+                | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' \
+                | sort -V \
+                | tail -n1)
+            fi
           fi
+
           if [ -z "$requested" ]; then
-            echo "Unable to determine the latest OpenWrt release."
+            echo "Unable to determine the OpenWrt version."
             exit 1
           fi
           echo "openwrt_version=$requested" >> "$GITHUB_OUTPUT"
-
-          # `skip' short-circuits the build and publish jobs when there is
-          # nothing to do (used by the daily scheduled run).
-          skip=false
-
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "amneziawg_version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "draft=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
-            # Find the latest published (non-draft, non-prerelease) YAAWG
-            # release. The `snapshot' pre-release is skipped on purpose. The
-            # first page of the releases API (newest first) is more than enough.
-            tag=$(gh api "repos/${GH_REPO}/releases" \
-              --jq '[.[] | select(.draft == false and .prerelease == false)][0].tag_name')
-
-            if [ -z "$tag" ] || [ "$tag" = "null" ]; then
-              echo "No published stable release to update; nothing to do."
-              skip=true
-              echo "amneziawg_version=master" >> "$GITHUB_OUTPUT"
-              echo "publish=false" >> "$GITHUB_OUTPUT"
-              echo "draft=false" >> "$GITHUB_OUTPUT"
-            else
-              # The archives carry the OpenWrt version in their name, so their
-              # presence tells whether this release was already built for it.
-              if gh release view "$tag" --json assets \
-                --jq '.assets[].name' \
-                | grep -q -- "-openwrt-${requested}\.tar\.gz$"; then
-                echo "Release $tag already has packages for OpenWrt $requested; nothing to do."
-                skip=true
-              else
-                echo "Building release $tag for the new OpenWrt $requested."
-              fi
-              echo "amneziawg_version=$tag" >> "$GITHUB_OUTPUT"
-              echo "publish=true" >> "$GITHUB_OUTPUT"
-              echo "draft=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "amneziawg_version=${{ inputs.amneziawg_version }}" >> "$GITHUB_OUTPUT"
-            echo "publish=${{ inputs.publish }}" >> "$GITHUB_OUTPUT"
-            echo "draft=${{ inputs.draft }}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Resolved OpenWrt version: $requested"
 
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
@@ -167,46 +175,63 @@ jobs:
             name=$(basename "$dir")
             tar -czf "dist/${name}-openwrt-${{ needs.prepare.outputs.openwrt_version }}.tar.gz" -C "$dir" .
           done
+          ls -la dist/
 
       - name: Attach packages to the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.prepare.outputs.amneziawg_version }}
+          TAG: ${{ needs.prepare.outputs.release_tag }}
+          SOURCE: ${{ needs.prepare.outputs.amneziawg_version }}
           OPENWRT_VERSION: ${{ needs.prepare.outputs.openwrt_version }}
           DRAFT: ${{ needs.prepare.outputs.draft }}
         run: |
           set -e
-          if view_error="$(gh release view "$TAG" 2>&1 >/dev/null)"; then
-            echo "Adding the OpenWrt $OPENWRT_VERSION packages to the existing release $TAG."
-            gh release upload "$TAG" dist/* --clobber
-            exit 0
-          elif ! printf '%s' "$view_error" | grep -qi 'release not found'; then
-            echo "Unable to look up the release $TAG: $view_error"
-            exit 1
-          fi
 
+          # Ensure the release tag exists (needed for rolling tags like `latest`)
           if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Refusing to create a release for '$TAG', which is not a tag."
-            echo "Tag the commit first, or re-run with an existing release tag."
-            exit 1
+            echo "Creating tag ${TAG}..."
+            # Point tag at the commit we built from when possible, else master tip
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${SOURCE}" >/dev/null 2>&1; then
+              sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${SOURCE}" --jq .object.sha)
+              # Annotated tags resolve to a tag object; peel to commit if needed
+              type=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${SOURCE}" --jq .object.type)
+              if [ "$type" = "tag" ]; then
+                sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq .object.sha)
+              fi
+            else
+              sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq .object.sha 2>/dev/null \
+                || gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq .object.sha)
+            fi
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${TAG}" \
+              -f sha="$sha" >/dev/null
+            echo "Tag ${TAG} created at ${sha}"
           fi
-
-
-          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$TAG" --jq .body > generated-notes.md || true
 
           {
-            printf 'Packages built against OpenWrt %s.\n\n' "$OPENWRT_VERSION"
+            printf 'Packages built from `%s` against OpenWrt %s.\n\n' "$SOURCE" "$OPENWRT_VERSION"
             printf 'Every archive contains `kmod-amneziawg`, `amneziawg-go`, `amneziawg-tools`,\n'
             printf '`luci-proto-amneziawg` and the localization package for one target. Pick the\n'
             printf 'archive matching your `Target Platform` and package architecture, see the\n'
-            printf 'README for installation instructions.\n\n'
-            cat generated-notes.md
+            printf 'README for installation instructions.\n'
           } > notes.md
 
-          echo "Creating release $TAG with the OpenWrt $OPENWRT_VERSION packages."
-          gh release create "$TAG" dist/* \
-            --title "YAAWG $TAG" \
-            --notes-file notes.md \
-            $([ "$DRAFT" = "true" ] && echo --draft)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release ${TAG} with OpenWrt ${OPENWRT_VERSION} packages."
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" \
+              --notes-file notes.md \
+              --title "YAAWG ${TAG} (OpenWrt ${OPENWRT_VERSION})" \
+              || true
+          else
+            echo "Creating release ${TAG} with OpenWrt ${OPENWRT_VERSION} packages."
+            extra=()
+            if [ "$DRAFT" = "true" ]; then
+              extra+=(--draft)
+            fi
+            gh release create "$TAG" dist/* \
+              --title "YAAWG ${TAG} (OpenWrt ${OPENWRT_VERSION})" \
+              --notes-file notes.md \
+              "${extra[@]}"
+          fi

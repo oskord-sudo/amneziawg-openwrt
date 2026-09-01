@@ -3,7 +3,7 @@
 ## FAQ & TL;DR
 
 **Q: Where can I get the binaries?**  
-A: Prebuilt packages for the most popular architectures are published on the [releases page](../../releases): a versioned release for the latest stable OpenWRT version and a daily refreshed `snapshot` pre-release for `SNAPSHOT`. If your architecture is not covered, [build it yourself](#how-to-use-the-new-workflow).
+A: Prebuilt packages for the most popular architectures are published on the [releases page](../../releases) for the latest stable OpenWrt version. If your architecture is not covered, [build it yourself](#how-to-use-the-new-workflow).
 
 **Q: What is the latest supported version of the protocol?**  
 A: YAAWG fully supports AmneziaWG v3.1, adding random packet trailers and the option to disable cookie replies on top of the v3.0 header protection, content padding and customizable timings, and everything v2.0 offers (S3-S4, I1-I5 and ranged H1-H4 parameters). See the [protocol parameters](#protocol-parameters) section.
@@ -13,16 +13,15 @@ A: Use the kernel module by default. If it doesn't work for you, switch to the G
 
 **Q: Why should I still compile the packages myself?**  
 A: There are several reasons:  
-1. OpenWRT supports many architectures and targets, and only the most popular ones are prebuilt.  
+1. OpenWrt supports many architectures and targets, and only the most popular ones are prebuilt.  
 2. It takes just a few clicks and about 20 minutes to compile binaries with your parameters.  
-3. Kernel modules built for `SNAPSHOT` are only installable while the firmware `vermagic` matches.
-4. You can review all the sources and make sure there are no unexpected issues or vulnerabilities before building or deploying.
+3. You can review all the sources and make sure there are no unexpected issues or vulnerabilities before building or deploying.
 
 **Q: How are versions named?**  
 A: Versioning follows the pattern `x.y.z` where `x` and `y` represent the current AmneziaWG version, and `z` corresponds to the YAAWG version.
 
 **Q: I get errors on steps `Download and prepare SDK`, `Checkout OpenWRT repository`, `Update feeds`. Any advice?**  
-A: It looks like the OpenWRT repository went for a coffee break and is unavailable at the moment. Try restarting the workflow in 15-40 minutes.
+A: It looks like the OpenWrt repository went for a coffee break and is unavailable at the moment. Try restarting the workflow in 15-40 minutes.
 
 ## Project description
 
@@ -180,8 +179,8 @@ This repository is intended primarily for compiling packages during the firmware
 
 3. Update package feeds by running: `{path to openwrt dir}/scripts/feeds update -a`
 
-4. Shall you build the firmware with the `amneziawg-go` package, please make sure the included Go package version is `1.25.0` or higher. Most OpenWRT versions except `SNAPSHOT` have older Go versions. To upgrade:
-   - Clone the latest OpenWRT Packages repository: `git clone https://github.com/openwrt/packages.git`.
+4. Shall you build the firmware with the `amneziawg-go` package, please make sure the included Go package version is `1.25.0` or higher. Most OpenWrt versions have older Go versions. To upgrade:
+   - Clone the latest OpenWrt Packages repository: `git clone https://github.com/openwrt/packages.git`.
    - Replace `{path to openwrt dir}/feeds/packages/lang/golang` with the one from the cloned repository at `{path to the cloned repository}/packages/lang/golang`.
 
 5. Install packages by running: `{path to openwrt dir}/scripts/feeds install -a`
@@ -199,21 +198,16 @@ This repository is intended primarily for compiling packages during the firmware
 The most popular architectures are built automatically and published on the [releases page](../../releases), so for most routers no compilation is needed at all.
 
 1. Obtain your router parameters:
-   - **OpenWRT version:** `SNAPSHOT` or a stable release (e.g., `24.10.2`), found under `Status -> Overview` on the `Firmware Version` line.
+   - **OpenWrt version:** a stable release (e.g., `24.10.2`), found under `Status -> Overview` on the `Firmware Version` line.
    - **Target and Subtarget:** found under `Status -> Overview` on the `Target Platform` line (before and after the slash).
 
-2. Pick the archive matching your parameters:
-   - For a stable release, take it from the latest versioned release. It is built against the newest stable OpenWRT version.
-   - For `SNAPSHOT`, take it from the `snapshot` pre-release, which is rebuilt every day. Since `SNAPSHOT` firmware changes daily as well, the kernel module only installs while the `vermagic` recorded in `build-info.txt` matches your firmware (see [below](#vermagic-control-for-snapshot-versions)).
+2. Pick the archive matching your parameters from the latest versioned release. It is built against the newest stable OpenWrt version.
 
 3. Extract the archive and [install the packages](#how-to-install-amneziawg).
 
-Two workflows keep those artifacts up to date, and both of them can also be started by hand from a fork:
+The `Release - Build AmneziaWG for the latest OpenWrt release` workflow runs whenever a `vX.Y.Z` tag is pushed. It resolves the newest stable OpenWrt version on its own and collects the packages into a draft release, so that the changelog can be written before it goes public. Started by hand against an already published release, it only adds the new archives to it, which is how an unchanged YAAWG version is rebuilt for a freshly released OpenWrt version. The same workflow also runs once a day on a schedule: it looks up the newest stable OpenWrt version and the latest published YAAWG release, and if that release does not yet contain archives for that OpenWrt version it builds them and attaches them automatically. When everything is already up to date the scheduled run does nothing, so new OpenWrt releases are covered without any manual tracking.
 
-1. `Release - Build AmneziaWG for the latest OpenWrt release` runs whenever a `vX.Y.Z` tag is pushed. It resolves the newest stable OpenWRT version on its own and collects the packages into a draft release, so that the changelog can be written before it goes public. Started by hand against an already published release, it only adds the new archives to it, which is how an unchanged YAAWG version is rebuilt for a freshly released OpenWRT version. The same workflow also runs once a day on a schedule: it looks up the newest stable OpenWRT version and the latest published YAAWG release, and if that release does not yet contain archives for that OpenWRT version it builds them and attaches them automatically. When everything is already up to date the scheduled run does nothing, so new OpenWRT releases are covered without any manual tracking.
-2. `Snapshot - Build AmneziaWG for OpenWrt SNAPSHOT` runs daily and republishes the rolling `snapshot` pre-release.
-
-Every archive is named `amneziawg-{target}-{subtarget}-{architecture}-openwrt-{OpenWRT version}.tar.gz`, so builds of the same YAAWG version for several OpenWRT versions can live side by side in one release.
+Every archive is named `amneziawg-{target}-{subtarget}-{architecture}-openwrt-{OpenWrt version}.tar.gz`, so builds of the same YAAWG version for several OpenWrt versions can live side by side in one release.
 
 The list of built architectures lives in [.github/targets.json](.github/targets.json); add an entry there to cover another target.
 
@@ -230,7 +224,7 @@ Key differences between the workflows:
 3. The new workflow consists of a single step instead of two.
 4. The new workflow also compiles the localization package.
 
-Both workflows record the `vermagic` value on the `Vermagic:` line of `build-info.txt` within the artifacts (see below).
+Both workflows record the `vermagic` value on the `Vermagic:` line of `build-info.txt` within the artifacts.
 
 #### How to Use the New Workflow
 
@@ -239,8 +233,8 @@ The new workflow is a single step process: run it, and when complete, all compil
 Steps to follow:
 
 1. Obtain your router parameters:
-   - **OpenWRT version:** `SNAPSHOT` or a stable release (e.g., `24.10.2`), found under `Status -> Overview` on the `Firmware Version` line.
-   - **CPU/package architecture:** run `apk info kernel` or `opkg info kernel` to check the `Architecture` value (e.g., `aarch64_cortex-a53`), or consult the [OpenWRT router database](https://openwrt.org/toh/start).
+   - **OpenWrt version:** a stable release (e.g., `24.10.2`), found under `Status -> Overview` on the `Firmware Version` line.
+   - **CPU/package architecture:** run `apk info kernel` or `opkg info kernel` to check the `Architecture` value (e.g., `aarch64_cortex-a53`), or consult the [OpenWrt router database](https://openwrt.org/toh/start).
    - **Target and Subtarget:** found under `Status -> Overview` on the `Target Platform` line (before and after the slash).
 
 2. Fork this repository.
@@ -253,13 +247,13 @@ Steps to follow:
 
 5. Wait approximately 20 minutes until the build completes.
 
-6. If you get an error in step `Download and prepare SDK`, it is more likely that the OpenWRT repository is unavailable. Please restart the process in 15-40 minutes.
+6. If you get an error in step `Download and prepare SDK`, it is more likely that the OpenWrt repository is unavailable. Please restart the process in 15-40 minutes.
 
 7. Download the artifacts, extract them, and install the packages.
 
 #### How to Use the Legacy Workflow
 
-The legacy process involves two workflows (steps): building the OpenWRT toolchain cache (about 2.5 hours) and compiling AmneziaWG packages (under 20 minutes). The toolchain build needs to be completed once, after which the package compilation step can be repeated as needed.
+The legacy process involves two workflows (steps): building the OpenWrt toolchain cache (about 2.5 hours) and compiling AmneziaWG packages (under 20 minutes). The toolchain build needs to be completed once, after which the package compilation step can be repeated as needed.
 
 Steps:
 
@@ -275,12 +269,12 @@ Steps:
 
 5. Wait approximately 2 to 2.5 hours for the cache build to complete.
 
-6. If you get an error in steps `Checkout OpenWRT repository`, `Update feeds`, it is more likely that the OpenWRT repository is unavailable. Please restart step 1 in 15-40 minutes.
+6. If you get an error in steps `Checkout OpenWRT repository`, `Update feeds`, it is more likely that the OpenWrt repository is unavailable. Please restart step 1 in 15-40 minutes.
 
 7. Select the workflow `Legacy - step 2. Build AmneziaWG from cache`, input the parameters, and run it.
    - Choose whether to compile the kernel module, Go implementation, or both.
    
-8. Again, errors in step `Checkout OpenWRT repository` show that the OpenWRT repository is unavailable. Please restart step 2 in 15-40 minutes.
+8. Again, errors in step `Checkout OpenWRT repository` show that the OpenWrt repository is unavailable. Please restart step 2 in 15-40 minutes.
 
 9. Wait around 10–20 minutes for the packages to compile.
 
@@ -306,9 +300,10 @@ Steps:
 
 3. Congratulations! AmneziaWG is installed. Go to `Network -> Interfaces`, click `Add new interface...`, then select `AmneziaWG` as the protocol.
 
-> **Note:** You may need to clear your browser cache to see the new protocol available in OpenWRT.
+> **Note:** You may need to clear your browser cache to see the new protocol available in OpenWrt.
 
-#### Vermagic control for `SNAPSHOT` versions
-> **Note:** Every workflow records the `vermagic` on the `Vermagic:` line of `build-info.txt` within the artifacts — the prebuilt `release` and `snapshot` archives as well as both compile-it-yourself workflows (`New - Build AmneziaWG from SDK` and the legacy one).
+#### Vermagic control
 
-Vermagic is a hash calculated for the OpenWRT kernel. When installing kernel-related packages, OpenWRT checks if the package's `vermagic` matches the kernel's. If not, installation won't succeed. Since `SNAPSHOT` versions update daily, `vermagic` values may differ. Check your firmware's `vermagic` by running `apk info kernel` or `opkg info kernel` and noting the hash after the kernel version in `Version`. For example, `6.6.52~f58afd3748410d3b1baa06a466d6682-r1` means `vermagic` is `f58afd3748410d3b1baa06a466d6682`. Every workflow records the compiled package's `vermagic` value on the `Vermagic:` line of `build-info.txt` within the artifacts. If these do not match, the kernel module cannot be installed.
+> **Note:** Every workflow records the `vermagic` on the `Vermagic:` line of `build-info.txt` within the artifacts.
+
+Vermagic is a hash calculated for the OpenWrt kernel. When installing kernel-related packages, OpenWrt checks if the package's `vermagic` matches the kernel's. If not, installation won't succeed. Check your firmware's `vermagic` by running `apk info kernel` or `opkg info kernel` and noting the hash after the kernel version in `Version`. For example, `6.6.52~f58afd3748410d3b1baa06a466d6682-r1` means `vermagic` is `f58afd3748410d3b1baa06a466d6682`. Every workflow records the compiled package's `vermagic` value on the `Vermagic:` line of `build-info.txt` within the artifacts. If these do not match, the kernel module cannot be installed.

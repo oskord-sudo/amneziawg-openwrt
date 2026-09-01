@@ -1,6 +1,6 @@
 name: Reusable - Build AmneziaWG packages
 
-# Reusable building block shared by the release and the snapshot workflows.
+# Reusable building block shared by the release workflow.
 # It compiles the whole AmneziaWG package set for a single OpenWrt target using
 # the official SDK and uploads the result as a workflow artifact.
 
